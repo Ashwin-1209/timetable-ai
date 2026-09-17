@@ -136,10 +136,7 @@ def load_session_requirements(session):
                 continue
             seen_subject_ids.add(offering.subject_id)
 
-            subject = (
-                session.query(Subjects)
-                .get(offering.subject_id)
-            )
+            subject = session.get(Subjects, offering.subject_id)
             if subject is None:
                 continue
 
