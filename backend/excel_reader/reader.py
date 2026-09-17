@@ -1,5 +1,8 @@
 from openpyxl import load_workbook
 
+def clean(value):
+    return value.strip() if isinstance(value, str) else value
+
 def read_excel(file_path):
 
     wb = load_workbook(file_path)
@@ -14,7 +17,7 @@ def read_excel(file_path):
         sheet_data = []
 
         for row in rows[1:]:
-            data = dict(zip(headers, row))
+            data = dict(zip(headers, (clean(v) for v in row)))
             sheet_data.append(data)
 
         db[sheet] = sheet_data
