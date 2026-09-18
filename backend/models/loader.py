@@ -187,7 +187,7 @@ def main():
 
     session.close()
 
-    print("Data loaded successfully!")
+    #print("Data loaded successfully!")
 
 if __name__ == "__main__":
     main()
