@@ -1,4 +1,9 @@
 from ..models.loader import SessionRequirement, Preferences, Periods, Rooms, StaffSubjects, ClassGroups, Staff, Subjects, WORKING_DAYS, get_session, main
+from ..output_generator.excel_export import export_schedule_to_excel
+from ..output_generator.pdf_export import export_class_pdf, export_staff_pdf
+from .sa_optimizer import build_candidate_moves, attach_lab_pairs, simulated_annealing
+from .config import WEIGHTS, BAD_LAB_SLOTS, PER_DAY_CAP
+from .soft_constraints import calculate_objective, calculate_soft_constraints
 from ortools.sat.python import cp_model
 
 main()
@@ -363,12 +368,26 @@ for group_id, group in G.items():
                     sum(day_vars) >= 1
                 )
 
+for group_id, group in G.items():
+    for subject_id, subject in S.items():
+        for day in D:
+            day_vars = [
+                var
+                for (instance_id, staff_id, room_id, period_id), var in x.items()
+                if instance_to_group[instance_id] == group_id
+                and instance_to_subject[instance_id] == subject_id
+                and P[period_id]["day"] == day
+            ]
+            if day_vars:
+                model.Add(sum(day_vars) <= 2)
+
+schedule = []
+
 solver = cp_model.CpSolver()
 
 status = solver.Solve(model)
 
 if status in (cp_model.OPTIMAL, cp_model.FEASIBLE):
-
     print("Solution found!")
 
     for (instance_id, staff_id, room_id, period_id), var in x.items():
@@ -381,6 +400,17 @@ if status in (cp_model.OPTIMAL, cp_model.FEASIBLE):
             group = G[group_id]
             subject = S[subject_id]
 
+            schedule.append({
+                "instance_id": instance_id,
+                "staff_id": staff_id,
+                "room_id": room_id,
+                "period_id": period_id,
+                "group_id": group_id,
+                "subject_id": subject_id,
+                "day": P[period_id]["day"],
+                "period_number": P[period_id]["period_number"]
+            })
+
             print(
                 "Instance:", instance_id,
                 "| Group:", f'{group["department"]} {group["section"]}',
@@ -391,6 +421,70 @@ if status in (cp_model.OPTIMAL, cp_model.FEASIBLE):
                 "| Day:", P[period_id]["day"],
                 "| Period:", P[period_id]["period_number"]
             )
+
+    cpsat_cost, _ = None, None  # optional: score the CP-SAT-only schedule for your Phase 12 comparison table
+
+    candidate_moves = attach_lab_pairs(
+        build_candidate_moves(x.keys(), b.keys()),
+        b.keys(),
+        PP,
+    )
+
+    max_periods_per_day = {
+        staff_id: staff["max_periods_per_day"]
+        for staff_id, staff in T.items()
+    }
+
+    sa_result = simulated_annealing(
+        initial_schedule=schedule,
+        candidate_moves=candidate_moves,
+        P=P,
+        weights=WEIGHTS,
+        soft_constraint_kwargs=dict(
+            avoid=Avoid,
+            max_consecutive=MaxConsec_t,
+            working_days=D,
+            bad_lab_slots=BAD_LAB_SLOTS,
+            subjects=S,
+        ),
+        max_periods_per_day=max_periods_per_day,
+        per_day_cap=PER_DAY_CAP,
+        seed=42,  # drop this once you move to the >=5 unseeded runs for Phase 12
+        log_path="logs/sa_convergence_run1.csv",
+    )
+
+    final_schedule = sa_result["schedule"]
+
+    print("\n--- SA-optimized schedule ---")
+    for item in final_schedule:
+        print(
+            "Instance:", item["instance_id"],
+            "| Subject:", S[item["subject_id"]]["subject_code"],
+            "| Teacher:", T[item["staff_id"]]["staff_name"],
+            "| Room:", R[item["room_id"]]["room_number"],
+            "| Day:", item["day"],
+            "| Period:", item["period_number"],
+        )
+
+    cpsat_violations = calculate_soft_constraints(
+        schedule,
+        avoid=Avoid,
+        max_consecutive=MaxConsec_t,
+        working_days=D,
+        bad_lab_slots=BAD_LAB_SLOTS,
+        subjects=S,
+        per_day_cap=PER_DAY_CAP,
+    )
+    cpsat_cost = calculate_objective(cpsat_violations, WEIGHTS)
+    print("CP-SAT-only objective score:", cpsat_cost)
+
+    print("SA-optimized objective score:", sa_result["cost"])
+
+    print("\nSA finished. Best objective score:", sa_result["cost"])
+
+    export_schedule_to_excel(final_schedule, T, S, G, R, P, "output/timetable.xlsx")
+    export_class_pdf(final_schedule, T, S, G, P, "output/timetable_by_class.pdf")
+    export_staff_pdf(final_schedule, T, S, G, P, "output/timetable_by_staff.pdf")
 
 else:
     print("No feasible solution found.")
