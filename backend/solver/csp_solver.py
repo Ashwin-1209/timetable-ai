@@ -310,6 +310,59 @@ for staff_id in T:
             sum(daily_vars) <= T[staff_id]["max_periods_per_day"]
         )
 
+for group_id, group in G.items():
+    lab_subjects = [
+        subject_id
+        for subject_id, subject in S.items()
+        if subject["department"] == group["department"]
+        and subject["needs_lab"]
+    ]
+    for day in D:
+        lab_day_vars = []
+        for subject_id in lab_subjects:
+            subject_lab_vars = [
+                var
+                for (instance_id, staff_id, room_id, period_id), var in x.items()
+                if (
+                    instance_to_group[instance_id] == group_id
+                    and instance_to_subject[instance_id] == subject_id
+                    and P[period_id]["day"] == day
+                )
+            ]
+            if subject_lab_vars:
+                lab_day_var = model.NewBoolVar(
+                    f"lab_day_g{group_id}_s{subject_id}_{day}"
+                )
+
+                model.AddMaxEquality(
+                    lab_day_var,
+                    subject_lab_vars    
+                )
+
+                lab_day_vars.append(lab_day_var)
+        if lab_day_vars:
+            model.AddAtMostOne(lab_day_vars)
+
+    for subject_id, subject in S.items():
+        if subject["sessions_per_week"] <= 5:
+            continue
+        if subject["department"] != group["department"]:
+            continue
+        for day in D:
+            day_vars = [
+                var 
+                for (instance_id, staff_id, room_id, period_id), var in x.items()
+                if (
+                    instance_to_group[instance_id] == group_id
+                    and instance_to_subject[instance_id] == subject_id
+                    and P[period_id]["day"] == day
+                )
+            ]
+            if day_vars:
+                model.Add(
+                    sum(day_vars) >= 1
+                )
+
 solver = cp_model.CpSolver()
 
 status = solver.Solve(model)
